@@ -4,6 +4,9 @@ from scipy.interpolate import RegularGridInterpolator
 
 import matplotlib.pyplot as plt
 
+import netCDF4
+import glob
+
 # code to read bisicles hdf5 file
 
 # you will need install h5py which may be troublesome in condo but works using pip
@@ -238,30 +241,68 @@ class bisicles_hf5:
       def __init__(self,fname,time,variable_name,full_name,units,dx,x,y,data):
 
         self.fname = fname
-        self.time = time
+        self.time = np.array([time])
         self.variable_name = variable_name
         self.full_name = full_name
         self.units = units
         self.dx = dx
         self.x = x
         self.y = y
-        self.data = data
+        self.data = np.array([data])
 
-      def plot(self):
+      def plot(self,tstep=0):
+
+        # just a simple plot, flatten arrays are likley to be [t,x,y] so eed to specfiy which t
 
         fig, ax = plt.subplots()
 
         X, Y = np.meshgrid(self.y - self.dx/2.0,self.x - self.dx/2.0)
 
-        pcm = ax.pcolormesh(X,Y,self.data,shading='nearest',cmap='hsv')
+        pcm = ax.pcolormesh(X,Y,self.data[tstep,:,:],shading='nearest',cmap='hsv')
 
         ax.set_aspect('equal','box')
 
         fig.colorbar(pcm,ax = ax,location = 'right',label = self.units)
-        plt.title(self.full_name + ' in ' + self.units + ' at ' + '{:.2f}'.format(self.time) + ' years')
+        plt.title(self.full_name + ' in ' + self.units + ' at ' + '{:.2f}'.format(self.time[tstep]) + ' years')
 
         fig.tight_layout()
         plt.show()
+
+      def write_netcdf(self,ncname='test.nc'):
+
+        # writes flattened to netcdf
+
+        ncfile = netCDF4.Dataset(ncname,mode='w',format='NETCDF4_CLASSIC',clobber=True)
+
+        x = ncfile.createDimension('x',len(self.x))
+        y = ncfile.createDimension('y',len(self.y))
+        t = ncfile.createDimension('t',len(self.time))
+
+        xs = ncfile.createVariable('x','f8',('x',))
+        xs.units = 'm'
+        xs[:] = self.x
+
+        ys = ncfile.createVariable('y','f8',('y',))
+        ys.units = 'm'
+        ys[:] = self.y
+
+        # output is typically yearly so set this as day 180 in a 360 day year
+
+        times = ncfile.createVariable('t','f8',('t',))
+        times.units = 'days since 0000-01-01'
+        times.long_name = 'time'
+        times.calendar = '360_day'
+        times[:] = self.time
+
+        data = ncfile.createVariable(self.variable_name,'f8',('t','x','y',))
+        data.units = self.units
+        data.long_name = self.full_name
+        data.standard_name = self.variable_name
+        data[:] = self.data
+
+        ncfile.hdf5file = self.fname
+
+        ncfile.close()
 
     def findend(xx,x,i1,i2):
 
@@ -278,7 +319,7 @@ class bisicles_hf5:
     ymin = np.min(self.y[0][:]) + dx0
     ymax = np.max(self.y[0][:]) - dx0
 
-    print(xmin,xmax,ymin,ymax)
+    # print(xmin,xmax,ymin,ymax)
 
     # create x,y coordinates for base grid at resolution specfied in call (default is finest)
     # xx = np.arange(xmin,xmax+self.dx[lev],self.dx[lev]) + self.offset[lev]
@@ -300,9 +341,9 @@ class bisicles_hf5:
     if not np.isnan(ymax):
       ymax = yy[np.nonzero(yy<ymax)[0][[-1]]]
 
-    print(xmin,xmax,ymin,ymax)
-    print(xx[0],xx[1],xx[-2],xx[-1])
-    print(yy[0],yy[1],yy[-2],yy[-1])
+    # print(xmin,xmax,ymin,ymax)
+    # print(xx[0],xx[1],xx[-2],xx[-1])
+    # print(yy[0],yy[1],yy[-2],yy[-1])
 
     # create suitably sized array to hold flattened data (base grid)
     data = np.zeros((len(xx),len(yy)))
@@ -445,3 +486,46 @@ class bisicles_hf5:
 
     fig.tight_layout()
     plt.show()
+
+def multiple_files(searchstr,varb):
+
+  # code to scan through a list of bisicles plot files and extract a variable
+  # flatten and save to netcdf
+
+  # bh5.multiple_files('plot*.hdf5','thickness')
+
+  h5files = glob.glob(searchstr)
+
+  for i,h5file in enumerate(h5files):
+
+    print(h5file)
+
+    h5data = bisicles_hf5(h5file,varb)
+    flatdata = h5data.flatten()
+
+    if i == 0:
+      out = flatdata
+    else:
+      out.time = np.append(out.time,flatdata.time)
+      out.data = np.concatenate((out.data,flatdata.data),axis=0)
+
+  ss = h5files[0].split('.')
+  ncname = ss[0] + '_' + ss[1] + '_' + varb + '_' + str(int(out.time[0])) + '-' + str(int(out.time[-1])) + 'yr' + '.nc'
+
+  out.write_netcdf(ncname=ncname)
+
+  return out
+
+# might be useful to remove artefacts created when differencing two AMR grids
+
+# from scipy import ndimage, datasets
+# import matplotlib.pyplot as plt
+# fig = plt.figure()
+# plt.gray()  # show the filtered result in grayscale
+# ax1 = fig.add_subplot(121)  # left side
+# ax2 = fig.add_subplot(122)  # right side
+# ascent = datasets.ascent()
+# result = ndimage.uniform_filter(ascent, size=20)
+# ax1.imshow(ascent)
+# ax2.imshow(result)
+# plt.show()
